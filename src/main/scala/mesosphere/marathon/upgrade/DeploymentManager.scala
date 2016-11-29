@@ -5,10 +5,10 @@ import akka.actor.SupervisorStrategy.Stop
 import akka.actor._
 import akka.event.EventStream
 import akka.stream.Materializer
-import mesosphere.marathon.MarathonSchedulerActor.{CommandFailed, DeploymentStarted, DeploymentsRecovered, RetrieveRunningDeployments, RunningDeployments}
+import mesosphere.marathon.MarathonSchedulerActor.{ CommandFailed, DeploymentStarted, DeploymentsRecovered, RetrieveRunningDeployments, RunningDeployments }
 import mesosphere.marathon.core.health.HealthCheckManager
 import mesosphere.marathon.core.launchqueue.LaunchQueue
-import mesosphere.marathon.core.readiness.{ReadinessCheckExecutor, ReadinessCheckResult}
+import mesosphere.marathon.core.readiness.{ ReadinessCheckExecutor, ReadinessCheckResult }
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.core.task.termination.KillService
 import mesosphere.marathon.core.task.tracker.InstanceTracker
@@ -16,15 +16,14 @@ import mesosphere.marathon.io.storage.StorageProvider
 import mesosphere.marathon.state.PathId
 import mesosphere.marathon.storage.repository.DeploymentRepository
 import mesosphere.marathon.stream.Sink
-import org.apache.mesos.SchedulerDriver
 import org.slf4j.LoggerFactory
 
-import scala.async.Async.{async, await}
+import scala.async.Async.{ async, await }
 import scala.collection.immutable.Seq
 import scala.collection.mutable
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.{ Future, Promise }
 import scala.util.control.NonFatal
-import scala.util.{Failure, Success}
+import scala.util.{ Failure, Success }
 
 // format: OFF
 /**
@@ -76,9 +75,9 @@ import scala.util.{Failure, Success}
   *                                 |
   *                                 | -> repository.delete(conflicts).onComplete (2)
   *                                 |     -> repository.store(plan).onComplete
-  *                                 |         <- CancelConflictingDeployments
+  *                                 |         <- WaitForCanceledConflicts
   *                                 |
-  * -> CancelConflictingDeployments | -> Future.sequence(cancellations).onComplete (2.5)
+  * -> WaitForCanceledConflicts     | -> Future.sequence(cancellations).onComplete (2.5)
   *                                 |     <- LaunchDeploymentActor
   * ...                             ˅
   *
@@ -95,9 +94,8 @@ class DeploymentManager(
     healthCheckManager: HealthCheckManager,
     eventBus: EventStream,
     readinessCheckExecutor: ReadinessCheckExecutor,
-    marathonSchedulerDriverHolder: MarathonSchedulerDriverHolder,
     deploymentRepository: DeploymentRepository,
-    deploymentActorProps: (ActorRef, ActorRef, SchedulerDriver, KillService, SchedulerActions, DeploymentPlan, InstanceTracker, LaunchQueue, StorageProvider, HealthCheckManager, EventStream, ReadinessCheckExecutor) => Props = DeploymentActor.props)(implicit val mat: Materializer) extends Actor with ActorLogging {
+    deploymentActorProps: (ActorRef, ActorRef, KillService, SchedulerActions, DeploymentPlan, InstanceTracker, LaunchQueue, StorageProvider, HealthCheckManager, EventStream, ReadinessCheckExecutor) => Props = DeploymentActor.props)(implicit val mat: Materializer) extends Actor with ActorLogging {
   import context.dispatcher
   import mesosphere.marathon.upgrade.DeploymentManager._
 
@@ -109,9 +107,6 @@ class DeploymentManager(
   override def supervisorStrategy: SupervisorStrategy = OneForOneStrategy() {
     case NonFatal(e) => Stop
   }
-
-  @SuppressWarnings(Array("OptionGet"))
-  def driver: SchedulerDriver = marathonSchedulerDriverHolder.driver.get
 
   def receive: Receive = suspended
 
@@ -135,6 +130,7 @@ class DeploymentManager(
     // All messages are ignored until master reelection
   }
 
+  @SuppressWarnings(Array("all")) // async/await
   def started: Receive = {
     // Should only be sent by MarathonSchedulerActor on leader abdication. All the deployments are stopped
     // and the context becomes suspended. It's important not to receive DeploymentFinished messages from
@@ -148,7 +144,7 @@ class DeploymentManager(
       context.become(suspended)
 
     case CancelDeployment(id) =>
-      cancelDeployment(id)
+      cancelDeployment(sender(), id)
 
     case DeploymentFinished(plan) =>
       log.info(s"Removing ${plan.id} from list of running deployments")
@@ -158,7 +154,7 @@ class DeploymentManager(
 
     case LaunchDeploymentActor(plan, origSender) if isScheduledDeployment(plan.id) =>
       log.info(s"Launching DeploymentActor for ${plan.id}")
-      markDeploying(plan, origSender)
+      startDeployment(plan, origSender)
 
     case LaunchDeploymentActor(plan, _) =>
       log.info(s"Deployment ${plan.id} was already canceled or overridden by another one. Not proceeding with it")
@@ -205,11 +201,13 @@ class DeploymentManager(
       val conflicts = conflictingDeployments(plan)
       log.info(s"Found conflicting deployments ${conflicts.map(_.plan.id)} with the current plan ${plan.id}")
 
-      // 2. Remove all [Scheduled] deployments (they haven't been started yet, so there is nothing to cancel)
-      // and cancel (spawn StopActor and mark as [Canceling]) all [Deploying] deployments.
+      // 2. Remove all [Scheduled] deployments (they haven't been started yet, so there is nothing to cancel),
+      // however tell MarathonSchedulerActor that it was canceled since it needs to remove the lock and cancel
+      // (spawn StopActor and mark as [Canceling]) all [Deploying] deployments.
       conflicts.foreach{
-        case DeploymentInfo(_, p, DeploymentStatus.Scheduled, _) => runningDeployments.remove(p.id)
-        case DeploymentInfo(_, p, DeploymentStatus.Deploying, _) => markCanceling(p.id)
+        case DeploymentInfo(_, p, DeploymentStatus.Scheduled, _) => runningDeployments.remove(p.id).map(info =>
+          recipient ! DeploymentFailed(info.plan, new DeploymentCanceledException("The upgrade has been cancelled")))
+        case DeploymentInfo(_, p, DeploymentStatus.Deploying, _) => stopDeployment(p.id)
         case DeploymentInfo(_, _, DeploymentStatus.Canceling, _) => // Nothing to do here - this deployment is already being canceled
       }
 
@@ -239,10 +237,10 @@ class DeploymentManager(
         // asynchronous to the actor. While we were waiting for the repository.store() another forced deployment
         // could've canceled this one. To synchronize with the actor and prevent launching canceled deployments (see
         // isScheduledDeployment() check) we send ourselves a message.
-        self ! CancelConflictingDeployments(plan, conflicts, recipient)
+        self ! WaitForCanceledConflicts(plan, conflicts, recipient)
       }
 
-    case CancelConflictingDeployments(plan, conflicts, origSender) if isScheduledDeployment(plan.id) =>
+    case WaitForCanceledConflicts(plan, conflicts, origSender) if isScheduledDeployment(plan.id) =>
       // 6. Get conflicting deployments cancellation futures (status = [Canceling]) that aren't yet
       // completed and bind an onComplete callback.
       val toCancel = conflicts.filter(_.status == DeploymentStatus.Canceling)
@@ -253,20 +251,17 @@ class DeploymentManager(
         log.info(s"Conflicting deployments ${toCancel.map(_.plan.id)} for deployment ${plan.id} have been canceled")
         self ! LaunchDeploymentActor(plan, origSender)
       }
-
-    // TODO(AD): do we need to throw a TimeoutException in case canceling conflicting deployments
-    // TODO(AD): takes too long? (like MarathonSchedulerActor used to do)?
   }
 
-  private def cancelDeployment(id: String) = {
+  private def cancelDeployment(sender: ActorRef, id: String) = {
     runningDeployments.get(id) match {
       case Some(DeploymentInfo(_, _, DeploymentStatus.Scheduled, _)) =>
         log.info(s"Canceling scheduled deployment $id.")
-        runningDeployments.remove(id)
+        runningDeployments.remove(id).map(info => sender ! DeploymentFailed(info.plan, new DeploymentCanceledException("The upgrade has been cancelled")))
 
       case Some(DeploymentInfo(Some(_), _, DeploymentStatus.Deploying, _)) =>
         log.info(s"Canceling deployment $id which is already in progress.")
-        markCanceling(id)
+        stopDeployment(id)
 
       case Some(DeploymentInfo(_, _, DeploymentStatus.Canceling, _)) =>
         log.warn(s"The deployment $id is already being canceled.")
@@ -289,12 +284,11 @@ class DeploymentManager(
   }
 
   /** Method spawns a DeploymentActor for the passed plan and saves new DeploymentInfo with status = [Scheduled] */
-  private def markDeploying(plan: DeploymentPlan, origSender: ActorRef) = {
+  private def startDeployment(plan: DeploymentPlan, origSender: ActorRef) = {
     val ref = context.actorOf(
       deploymentActorProps(
         self,
         origSender,
-        driver,
         killService,
         scheduler,
         plan,
@@ -311,7 +305,8 @@ class DeploymentManager(
   }
 
   /** Method spawns a StopActor for the passed plan Id and saves new DeploymentInfo with status = [Canceling] */
-  private def markCanceling(id: String) = {
+  @SuppressWarnings(Array("OptionGet"))
+  private def stopDeployment(id: String) = {
     val info = runningDeployments(id)
     val stopFuture = stopActor(info.ref.get, new DeploymentCanceledException("The upgrade has been cancelled"))
     runningDeployments.update(id, info.copy(status = DeploymentStatus.Canceling, cancel = Some(stopFuture)))
@@ -346,7 +341,7 @@ object DeploymentManager {
   case class StartDeployment(plan: DeploymentPlan, origSender: ActorRef, force: Boolean = false)
   case class CancelDeployment(id: String)
   case object ShutdownDeployments
-  case class CancelConflictingDeployments(plan: DeploymentPlan, conflicts: Seq[DeploymentInfo], origSender: ActorRef)
+  case class WaitForCanceledConflicts(plan: DeploymentPlan, conflicts: Seq[DeploymentInfo], origSender: ActorRef)
   case class DeploymentFinished(plan: DeploymentPlan)
   case class DeploymentFailed(plan: DeploymentPlan, reason: Throwable)
   case class ReadinessCheckUpdate(deploymentId: String, result: ReadinessCheckResult)
@@ -376,6 +371,7 @@ object DeploymentManager {
     case object Deploying extends  DeploymentStatus
   }
 
+  @SuppressWarnings(Array("MaxParameters"))
   def props(
     taskTracker: InstanceTracker,
     killService: KillService,
@@ -385,11 +381,10 @@ object DeploymentManager {
     healthCheckManager: HealthCheckManager,
     eventBus: EventStream,
     readinessCheckExecutor: ReadinessCheckExecutor,
-    marathonSchedulerDriverHolder: MarathonSchedulerDriverHolder,
     deploymentRepository: DeploymentRepository,
-    deploymentActorProps: (ActorRef, ActorRef, SchedulerDriver, KillService, SchedulerActions, DeploymentPlan, InstanceTracker, LaunchQueue, StorageProvider, HealthCheckManager, EventStream, ReadinessCheckExecutor) => Props = DeploymentActor.props)(implicit mat: Materializer): Props = {
+    deploymentActorProps: (ActorRef, ActorRef, KillService, SchedulerActions, DeploymentPlan, InstanceTracker, LaunchQueue, StorageProvider, HealthCheckManager, EventStream, ReadinessCheckExecutor) => Props = DeploymentActor.props)(implicit mat: Materializer): Props = {
     Props(new DeploymentManager(taskTracker, killService, launchQueue,
-      scheduler, storage, healthCheckManager, eventBus, readinessCheckExecutor, marathonSchedulerDriverHolder, deploymentRepository, deploymentActorProps))
+      scheduler, storage, healthCheckManager, eventBus, readinessCheckExecutor, deploymentRepository, deploymentActorProps))
   }
 
 }
