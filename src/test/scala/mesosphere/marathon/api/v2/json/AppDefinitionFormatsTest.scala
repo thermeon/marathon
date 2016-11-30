@@ -507,11 +507,12 @@ class AppDefinitionFormatsTest
     val appDef = normalizeAndConvert(Json.parse(
       """{
         |  "id": "test",
+        |  "cmd": "foo",
         |  "unreachableStrategy": {
         |      "unreachableInactiveAfterSeconds": 600,
         |      "unreachableExpungeAfterSeconds": 1200
         |  }
-        |}""".stripMargin).as[App])
+        |}""".stripMargin).as[raml.App])
 
     appDef.unreachableStrategy.unreachableInactiveAfter should be(10.minutes)
     appDef.unreachableStrategy.unreachableExpungeAfter should be(20.minutes)

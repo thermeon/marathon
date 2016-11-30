@@ -137,7 +137,7 @@ class AppDefinitionTest extends MarathonSpec with Matchers {
       "Port names must be unique."
     )
 
-    val correct = AppDefinition(id = "test".toPath)
+    val correct = AppDefinition(id = "test".toRootPath)
 
     app = correct.copy(
       container = Some(Docker(

@@ -31,16 +31,12 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     case state.VersionInfo.NoVersion => None
   }
 
-  implicit val parameterWrites: Writes[state.Parameter, DockerParameter] = Writes { param =>
-    DockerParameter(param.key, param.value)
-  }
-
   implicit val appWriter: Writes[AppDefinition, App] = Writes { app =>
     // we explicitly do not write ports, uris, ipAddress because they are deprecated fields
     App(
       id = app.id.toString,
       acceptedResourceRoles = if (app.acceptedResourceRoles.nonEmpty) Some(app.acceptedResourceRoles) else None,
-      args = app.args,
+      args = if (app.args.nonEmpty) Some(app.args) else None,
       backoffFactor = app.backoffStrategy.factor,
       backoffSeconds = app.backoffStrategy.backoff.toSeconds.toInt,
       cmd = app.cmd,
@@ -120,65 +116,6 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     )
   }
 
-  implicit val portMappingRamlReader = Reads[ContainerPortMapping, state.Container.PortMapping] {
-    case ContainerPortMapping(containerPort, hostPort, labels, name, protocol, servicePort) =>
-      import state.Container.PortMapping._
-      val decodedProto = protocol match {
-        case NetworkProtocol.Tcp => TCP
-        case NetworkProtocol.Udp => UDP
-        case NetworkProtocol.UdpTcp => UDP_TCP
-      }
-      state.Container.PortMapping(
-        containerPort = containerPort,
-        hostPort = hostPort.orElse(defaultInstance.hostPort),
-        servicePort = servicePort,
-        protocol = decodedProto,
-        name = name,
-        labels = labels
-      )
-  }
-
-  implicit val appContainerRamlReader = Reads[Container, state.Container] { (container: Container) =>
-    val volumes = container.volumes.map(Raml.fromRaml(_))
-    val portMappings = container.portMappings.map(Raml.fromRaml(_))
-
-    val result: state.Container = (container.`type`, container.docker, container.appc) match {
-      case (EngineType.Docker, Some(docker), None) =>
-        state.Container.Docker(
-          volumes = volumes,
-          image = docker.image,
-          portMappings = portMappings, // assumed already normalized, see Formats
-          privileged = docker.privileged.getOrElse(false),
-          parameters = docker.parameters.map(p => Parameter(p.key, p.value)),
-          forcePullImage = docker.forcePullImage.getOrElse(false)
-        )
-      case (EngineType.Mesos, Some(docker), None) =>
-        state.Container.MesosDocker(
-          volumes = volumes,
-          image = docker.image,
-          portMappings = portMappings, // assumed already normalized, see Formats
-          credential = docker.credential.map(c => state.Container.Credential(principal = c.principal, secret = c.secret)),
-          forcePullImage = docker.forcePullImage.getOrElse(false)
-        )
-      case (EngineType.Mesos, None, Some(appc)) =>
-        state.Container.MesosAppC(
-          volumes = volumes,
-          image = appc.image,
-          portMappings = portMappings,
-          id = appc.id,
-          labels = appc.labels,
-          forcePullImage = appc.forcePullImage.getOrElse(false)
-        )
-      case (EngineType.Mesos, None, None) =>
-        state.Container.Mesos(
-          volumes = volumes,
-          portMappings = portMappings
-        )
-      case ct => throw SerializationFailedException(s"illegal container specification $ct")
-    }
-    result
-  }
-
   implicit val upgradeStrategyRamlReader = Reads[UpgradeStrategy, state.UpgradeStrategy] { us =>
     state.UpgradeStrategy(
       maximumOverCapacity = us.maximumOverCapacity,
@@ -208,7 +145,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     val result: AppDefinition = AppDefinition(
       id = PathId(app.id),
       cmd = app.cmd,
-      args = app.args,
+      args = app.args.getOrElse(Nil),
       user = app.user,
       env = Raml.fromRaml(app.env),
       instances = app.instances,
@@ -245,7 +182,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     app.copy(
       // id stays the same
       cmd = update.cmd.orElse(app.cmd),
-      args = update.args.getOrElse(app.args),
+      args = update.args.orElse(app.args),
       user = update.user.orElse(app.user),
       env = update.env.getOrElse(app.env),
       instances = update.instances.getOrElse(app.instances),
