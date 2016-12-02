@@ -427,7 +427,7 @@ class AppDeployIntegrationTest
     val create = marathon.createAppV2(app)
     create.code should be (201)
     waitForDeployment(create)
-    val taskId = marathon.tasks(app.id).value.head.id
+    val taskId = marathon.tasks(app.id.toPath).value.head.id
 
     When("a task of an app is killed")
     val response = marathon.killTask(PathId(app.id), taskId)
@@ -437,7 +437,7 @@ class AppDeployIntegrationTest
 
     Then("All instances of the app get restarted")
     waitForTasks(app.id.toPath, 1)
-    marathon.tasks(app.id).value.head should not be taskId
+    marathon.tasks(app.id.toPath).value.head should not be taskId
   }
 
   test("kill a task of an App with scaling") {
@@ -446,7 +446,7 @@ class AppDeployIntegrationTest
     val create = marathon.createAppV2(app)
     create.code should be (201)
     waitForDeployment(create)
-    val taskId = marathon.tasks(app.id).value.head.id
+    val taskId = marathon.tasks(app.id.toPath).value.head.id
 
     When("a task of an app is killed and scaled")
     marathon.killTask(app.id, taskId, scale = true).code should be (200)
@@ -599,7 +599,7 @@ class AppDeployIntegrationTest
     WaitTestSupport.validFor("deployment visible", 5.second)(marathon.listDeploymentsForBaseGroup().value.size == 1)
 
     When("the deployment is rolled back")
-    val delete = marathon.deleteDeployment(deploymentId, force = false)
+    val delete = marathon.deleteDeployment(deploymentId)
     delete.code should be (200)
 
     Then("the deployment should be gone")

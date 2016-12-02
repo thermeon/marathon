@@ -4,7 +4,6 @@ import mesosphere.marathon._
 import mesosphere.marathon.api.serialization.{ ContainerSerializer, PortDefinitionSerializer, PortMappingSerializer }
 import mesosphere.marathon.core.health.MesosHealthCheck
 import mesosphere.marathon.core.task
-import mesosphere.marathon.core.pod.{ BridgeNetwork, ContainerNetwork, HostNetwork }
 import mesosphere.marathon.core.task.Task
 import mesosphere.marathon.plugin.task.RunSpecTaskProcessor
 import mesosphere.marathon.state._
@@ -12,7 +11,7 @@ import mesosphere.marathon.stream._
 import mesosphere.mesos.ResourceMatcher.ResourceMatch
 import mesosphere.mesos.protos.LabelHelpers._
 import org.apache.mesos.Protos.Environment._
-import org.apache.mesos.Protos.{ DiscoveryInfo => _, HealthCheck => _, _ }
+import org.apache.mesos.Protos._
 import org.slf4j.LoggerFactory
 
 import scala.collection.immutable.Seq
@@ -207,7 +206,7 @@ class TaskBuilder(
 
 object TaskBuilder {
 
-  val log = LoggerFactory.getLogger(getClass)
+  private[TaskBuilder] val log = LoggerFactory.getLogger(getClass)
 
   def commandInfo(
     runSpec: AppDefinition,

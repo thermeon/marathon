@@ -59,7 +59,7 @@ class TaskUnreachableIntegrationTest extends AkkaIntegrationFunTest with Embedde
     And("a replacement task is started on a different slave")
     mesosCluster.agents(1).start() // Start an alternative slave
     waitForEventWith("status_update_event", _.info("taskStatus") == "TASK_RUNNING")
-    val tasks = marathon.tasks(app.id).value
+    val tasks = marathon.tasks(app.id.toPath).value
     tasks should have size 2
     tasks.groupBy(_.state).keySet should be(Set("TASK_RUNNING", "TASK_UNREACHABLE"))
     val replacement = tasks.find(_.state == "TASK_RUNNING").get
@@ -74,8 +74,8 @@ class TaskUnreachableIntegrationTest extends AkkaIntegrationFunTest with Embedde
     waitForEventMatching("Replacement task is killed") { matchEvent("TASK_KILLED", replacement) }
 
     And("there is only one running task left")
-    marathon.tasks(app.id).value should have size 1
-    marathon.tasks(app.id).value.head.state should be("TASK_RUNNING")
+    marathon.tasks(app.id.toPath).value should have size 1
+    marathon.tasks(app.id.toPath).value.head.state should be("TASK_RUNNING")
   }
 
   def matchEvent(status: String, task: ITEnrichedTask): CallbackEvent => Boolean = { event =>

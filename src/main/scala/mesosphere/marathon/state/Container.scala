@@ -170,8 +170,8 @@ object Container {
       }
     } and
       validGeneralContainer and
-      implied(networks.hasBridgeNetworking)(isTrue("hostPort is required for BRIDGE mode."){ container =>
-        container.portMappings.forall(_.hostPort.nonEmpty)
+      implied(networks.hasBridgeNetworking)(validator[Container] { container =>
+        container.portMappings is every(isTrue("hostPort is required for BRIDGE mode.")(_.hostPort.nonEmpty))
       })
   }
 }

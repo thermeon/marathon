@@ -89,7 +89,7 @@ class GroupManagerActorTest extends AkkaUnitTest with Mockito with Matchers with
       val rootGroup = createRootGroup(Map(app1.id -> app1))
       val update = manager(10 to 20).assignDynamicServicePorts(createRootGroup(), rootGroup)
 
-      val assignedPorts: Set[ Int ] = update.transitiveApps.flatMap(_.portNumbers)
+      val assignedPorts: Set[Int] = update.transitiveApps.flatMap(_.portNumbers)
       assignedPorts should have size 2
     }
 
@@ -101,7 +101,7 @@ class GroupManagerActorTest extends AkkaUnitTest with Mockito with Matchers with
       val updatedGroup = createRootGroup(Map(updatedApp1.id -> updatedApp1))
       val result = manager(10 to 20).assignDynamicServicePorts(originalGroup, updatedGroup)
 
-      val assignedPorts: Set[ Int ] = result.transitiveApps.flatMap(_.portNumbers)
+      val assignedPorts: Set[Int] = result.transitiveApps.flatMap(_.portNumbers)
       assignedPorts should have size 3
     }
 
@@ -112,7 +112,7 @@ class GroupManagerActorTest extends AkkaUnitTest with Mockito with Matchers with
         app1.id -> app1,
         app2.id -> app2
       ))
-      val ex = intercept[ PortRangeExhaustedException ] {
+      val ex = intercept[PortRangeExhaustedException] {
         manager(10 to 14).assignDynamicServicePorts(createRootGroup(), rootGroup)
       }
       ex.minPort should be(10)

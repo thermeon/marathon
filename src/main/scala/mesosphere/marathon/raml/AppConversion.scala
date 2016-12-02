@@ -27,7 +27,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
 
   implicit val versionInfoWrites: Writes[state.VersionInfo, Option[VersionInfo]] = Writes {
     case state.VersionInfo.FullVersionInfo(_, scale, config) => Some(VersionInfo(scale.toOffsetDateTime, config.toOffsetDateTime))
-    case state.VersionInfo.OnlyVersion(version) => None
+    case state.VersionInfo.OnlyVersion(_) => None
     case state.VersionInfo.NoVersion => None
   }
 
@@ -65,7 +65,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
       upgradeStrategy = Some(app.upgradeStrategy.toRaml),
       user = app.user,
       version = Some(app.versionInfo.version.toOffsetDateTime),
-      versionInfo = Some(app.versionInfo.toRaml),
+      versionInfo = app.versionInfo.toRaml,
       unreachableStrategy = Some(app.unreachableStrategy.toRaml),
       killSelection = Some(app.killSelection.toRaml)
     )
@@ -79,7 +79,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
       gpus = gpus.getOrElse(AppDefinition.DefaultGpus)
     )
 
-  implicit val residencyRamlReader = Reads[AppResidency, Residency] { residency =>
+  implicit val residencyRamlReader: Reads[AppResidency, Residency] = Reads { residency =>
     import ResidencyDefinition.TaskLostBehavior._
     Residency(
       relaunchEscalationTimeoutSeconds = residency.relaunchEscalationTimeoutSeconds.toLong,
@@ -90,7 +90,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     )
   }
 
-  implicit val fetchUriReader = Reads[Artifact, FetchUri] { artifact =>
+  implicit val fetchUriReader: Reads[Artifact, FetchUri] = Reads { artifact =>
     import FetchUri.defaultInstance
     FetchUri(
       uri = artifact.uri,
@@ -101,7 +101,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     )
   }
 
-  implicit val portDefinitionRamlReader = Reads[PortDefinition, state.PortDefinition] { portDef =>
+  implicit val portDefinitionRamlReader: Reads[PortDefinition, state.PortDefinition] = Reads { portDef =>
     val protocol: String = portDef.protocol match {
       case NetworkProtocol.Tcp => "tcp"
       case NetworkProtocol.Udp => "udp"
@@ -116,7 +116,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
     )
   }
 
-  implicit val upgradeStrategyRamlReader = Reads[UpgradeStrategy, state.UpgradeStrategy] { us =>
+  implicit val upgradeStrategyRamlReader: Reads[UpgradeStrategy, state.UpgradeStrategy] = Reads { us =>
     state.UpgradeStrategy(
       maximumOverCapacity = us.maximumOverCapacity,
       minimumHealthCapacity = us.minimumHealthCapacity
@@ -170,7 +170,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
       residency = selectedStrategy.residency,
       secrets = Raml.fromRaml(app.secrets),
       unreachableStrategy = app.unreachableStrategy.map(_.fromRaml).getOrElse(AppDefinition.DefaultUnreachableStrategy),
-      killSelection = app.killSelection.map(_.fromRaml).getOrElse(AppDefinition.DefaultKillSelection)
+      killSelection = app.killSelection.map(_.fromRaml).getOrElse(state.KillSelection.DefaultKillSelection)
     )
     result
   }
@@ -217,7 +217,7 @@ trait AppConversion extends ConstraintConversion with EnvVarConversion with Heal
       residency = update.residency.orElse(app.residency),
       secrets = update.secrets.getOrElse(app.secrets),
       taskKillGracePeriodSeconds = update.taskKillGracePeriodSeconds.orElse(app.taskKillGracePeriodSeconds),
-      unreachableStrategy = update.unreachableStrategy.map(_.fromRaml).orElse(app.unreachableStrategy),
+      unreachableStrategy = update.unreachableStrategy.orElse(app.unreachableStrategy),
       killSelection = update.killSelection.orElse(app.killSelection)
     )
   }
